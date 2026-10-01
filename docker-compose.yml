@@ -1,0 +1,104 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: engage
+      POSTGRES_USER: engage
+      POSTGRES_PASSWORD: engage
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engage -d engage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: ./apps/api
+    command: ["alembic", "upgrade", "head"]
+    environment: &api_env
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://engage:engage@db:5432/engage
+      REDIS_URL: redis://redis:6379/0
+      APP_SECRET_KEY: local-dev-secret-change-me
+      JWT_ISSUER: risheh-engage
+      JWT_AUDIENCE: risheh-engage-api
+      N8N_BASE_URL: http://n8n:5678
+      N8N_WEBHOOK_SECRET: local-automation-secret
+      N8N_PUBLISH_WEBHOOK_URL: http://n8n:5678/webhook/risheh-engage-publish
+      N8N_OUTBOUND_WEBHOOK_URL: http://n8n:5678/webhook/risheh-engage-outbound
+      OUTBOX_BATCH_SIZE: 20
+      OUTBOX_MAX_ATTEMPTS: 8
+      OUTBOX_LOCK_SECONDS: 120
+      OUTBOX_POLL_SECONDS: 3
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+      AI_PROVIDER: ${AI_PROVIDER:-openai-compatible}
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./apps/api
+    environment: *api_env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  outbox-worker:
+    build: ./apps/api
+    command: ["python", "-m", "app.outbox_worker"]
+    environment: *api_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      n8n:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build: ./apps/web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+  n8n:
+    image: n8nio/n8n:latest
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_ENCRYPTION_KEY: change-me-in-local-env
+      GENERIC_TIMEZONE: Asia/Tehran
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+      RISHEH_API_BASE_URL: http://api:8000
+      RISHEH_AUTOMATION_SECRET: local-automation-secret
+    ports: ["5678:5678"]
+    volumes: [n8n_data:/home/node/.n8n]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  n8n_data:

@@ -1,0 +1,81 @@
+{
+  "name": "ENGAGE__PUBLISH__TELEGRAM__V1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "risheh-engage-publish",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Publish Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const secret = $json.headers?.['x-automation-secret'];\nif (!secret || secret !== $env.RISHEH_AUTOMATION_SECRET) throw new Error('invalid automation secret');\nconst e = $json.body ?? $json;\nif (e.event_type !== 'content.publish.requested') throw new Error('unsupported event type');\nif (e.payload?.platform !== 'telegram') throw new Error('unsupported platform');\nif (!e.payload?.idempotency_key) throw new Error('missing idempotency key');\nreturn [{json: e}];"
+      },
+      "id": "validate",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_DEFAULT_CHAT_ID, text: $json.payload.text }) }}",
+        "options": {}
+      },
+      "id": "telegram",
+      "name": "Telegram Send Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.RISHEH_API_BASE_URL + '/api/v1/publications/callback'}}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "X-Automation-Secret", "value": "={{$env.RISHEH_AUTOMATION_SECRET}}"}]},
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ publication_id: $('Validate Event').item.json.payload.publication_id, idempotency_key: $('Validate Event').item.json.payload.idempotency_key, status: 'published', external_id: String($json.result?.message_id ?? ''), external_url: null, error_code: null, error_message: null }) }}",
+        "options": {}
+      },
+      "id": "callback",
+      "name": "Publication Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { accepted: true } }}", "options": {}},
+      "id": "respond",
+      "name": "Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1020, 0]
+    }
+  ],
+  "connections": {
+    "Publish Webhook": {"main": [[{"node": "Validate Event", "type": "main", "index": 0}]]},
+    "Validate Event": {"main": [[{"node": "Telegram Send Message", "type": "main", "index": 0}]]},
+    "Telegram Send Message": {"main": [[{"node": "Publication Callback", "type": "main", "index": 0}]]},
+    "Publication Callback": {"main": [[{"node": "Accepted", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "00000000-0000-0000-0000-000000000004",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}
